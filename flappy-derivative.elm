@@ -4,57 +4,75 @@ import Graphics.Element exposing (..)
 import Keyboard
 import Time exposing (..)
 import Window
+import List exposing (..)
+import Random exposing (..)
 
-type alias Model = { a : Float, b : Float, c : Float }
+type alias Model = { x : Float, a : Float, b : Float, c : Float, barriers : List Barrier, seed : Seed }
 
-type alias Keys = { x:Int, y:Int }
+type alias Keys = { x : Int, y : Int }
+
+type alias Barrier = { x : Float, y : Float, dir : Direction }
+type Direction = Up | Down
 
 s0 : Model
-s0 = { a = 0, b = 0, c = 0 }
+s0 = { x = 0, a = 0, b = 0, c = 0, barriers = [], seed = initialSeed 12345 }
 
-update : (Float, Keys) -> Model -> Model
-update (dt, keys) s = s |> handle keys |> evolve dt
+vx : Float
+vx = 1
+
+update : ((Float, Float), (Float, Keys)) -> Model -> Model
+update ((w,h), (dt, keys)) s = s |> handle keys |> removeBarriers (w,h) |> addBarriers (w,h) |> evolve dt
     
 handle : Keys -> Model -> Model
 handle keys s =
   case keys.x of
-    0    -> { a = s.a, b = s.b, c = s.c + toFloat keys.y / 500 }
-    1    -> { a = s.a, b = s.b, c = 0 }
+    0    -> { s | b = s.b + toFloat keys.y / 5 }
+    1    -> { s | b = 0 }
     _    -> s0
 
-evolve : Float -> Model -> Model
-evolve dt {a,b,c} =
-  let a' = a + dt*b
-      b' = b + dt*c
-      c' = c
-  in  { a = a', b = b', c = c' }
+removeBarriers : (Float,Float) -> Model -> Model
+removeBarriers (w,h) s = { s | barriers = filter (\b -> b.x >= s.x - w) s.barriers }
 
-view : (Int, Int) -> Model -> Element
-view (w',h') s =
+addBarriers : (Float,Float) -> Model -> Model
+addBarriers (w,h) s =
+  let lastX = foldl max s.x <| List.map (.x) s.barriers in
+  if lastX > s.x + w then s else
+  let (newY, seed')    = generate (float (-200) 200) s.seed
+      (newDir, seed'') = generate (int 0 1) seed'
+      (newX, seed''')  = generate (float 0 300) seed''
+      newBarrier = { x = lastX + 100 + newX, y = newY, dir = if newDir == 0 then Up else Down }
+  in  addBarriers (w,h) { s | barriers = newBarrier :: s.barriers, seed = seed''' }
+
+evolve : Float -> Model -> Model
+evolve dt s =
+  let a' = s.a + dt*s.b
+      b' = s.b + dt*s.c
+      c' = s.c
+      x' = s.x + dt*vx
+  in  { s | x = x', a = a', b = b', c = c' }
+
+view : (Float, Float) -> Model -> Element
+view (w,h) s =
   let
-    (w,h)      = (toFloat w', toFloat h')
     src        = "http://elm-lang.org/imgs/mario/jump/right.gif"
     marioImage = image 35 35 src
   in
-    collage w' h'
+    collage (round w) (round h) <|
       [ rect w h
           |> filled (rgb 174 238 238)
-      , rect w 50
-          |> filled (rgb 74 167 43)
-          |> move (0, 0)
-      , rect 10 50
-          |> filled (rgb 174 167 43)
-          |> move (s.b * 50, 0)
-      , rect 10 50
-          |> filled (rgb 214 0 43)
-          |> move (s.c * 300, 0)
       , marioImage
           |> toForm
           |> move (0, s.a)
-      ]
+      ] ++ List.map (move (-s.x, 0) << viewBarrier h) s.barriers
+
+viewBarrier h {x,y,dir} = case dir of
+    Up   -> rect 20 h |> filled (rgb 0 0 0) |> move (x,  h/2 + y)
+    Down -> rect 20 h |> filled (rgb 0 0 0) |> move (x, -h/2 + y)
 
 main : Signal Element
-main = Signal.map2 view Window.dimensions (Signal.foldp update s0 input)
+main =
+    let dim = Signal.map (\(w,h) -> (toFloat w, toFloat h)) Window.dimensions
+    in  Signal.map2 view dim (Signal.foldp update s0 <| Signal.map2 (\a b -> (a,b)) dim input)
 
 input : Signal (Float, Keys)
 input =
